@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local dev database and any raw business data must never be committed.
+data/
+!data/.gitkeep
+*.duckdb
+*.db
+*.sqlite
+*.sqlite3
+
+.streamlit/secrets.toml
+.env
