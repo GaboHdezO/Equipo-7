@@ -23,11 +23,13 @@ from pipeline.exportar import a_csv_bytes, a_xlsx_bytes
 from pipeline.ingest import load_alcances, load_chelink, load_claves, load_dataverse
 from pipeline.queries import alertas_enriquecidas, carga_log_reciente, dim_productos, dim_tiendas
 from pipeline.run_pipeline import recalcular_todo
+from pipeline.schema import create_all
 from sqlalchemy import text
 
 st.set_page_config(page_title="Chedraui · Inventario y Ventas", layout="wide", page_icon="📦")
 
 engine = get_engine()
+create_all(engine)  # crea las tablas si la base está vacía (primer arranque contra una BD nueva)
 
 if "cache_token" not in st.session_state:
     st.session_state.cache_token = 0
