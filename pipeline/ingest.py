@@ -94,10 +94,49 @@ def load_alcances(engine: Engine, file_path: str | Path, vigente_desde: dt.date 
     return n
 
 
+_ALIAS_DATAVERSE = {
+    # esquema original de prueba
+    "Ventas": "ventas_piezas",
+    "Inventario": "inventario_piezas",
+    # esquema real de Chedraui.parquet
+    "Venta": "ventas_piezas",
+    "Inv_Calculado": "inventario_piezas",
+}
+
+
+def _resolver_sku_faltante(engine: Engine, df: pd.DataFrame) -> pd.DataFrame:
+    """Rellena sku (NumArticulo) nulo usando el catálogo de Claves vigente,
+    cruzando por UPC. Cubre también el caso real de Chedraui.parquet donde,
+    para un par de productos, la columna "UPC" trae en realidad el propio
+    número de SKU en vez de un código de barras."""
+    faltan = df["sku"].isna()
+    if not faltan.any():
+        return df
+
+    with engine.connect() as conn:
+        catalogo = pd.read_sql(text("SELECT sku, upc FROM catalogo_claves"), conn)
+    if catalogo.empty:
+        raise ValueError(
+            "Hay filas sin SKU en el histórico y el catálogo de Claves todavía no está "
+            "cargado (no se puede resolver el UPC -> SKU). Carga Claves.xlsx primero."
+        )
+
+    lookup = dict(zip(catalogo["upc"].astype(str), catalogo["sku"]))
+    lookup.update({str(s): s for s in catalogo["sku"]})  # autocruce: UPC que en realidad es el SKU
+
+    resuelto = df.loc[faltan, "upc"].astype(str).map(lookup)
+    df.loc[faltan, "sku"] = resuelto
+    sin_resolver = df["sku"].isna().sum()
+    if sin_resolver:
+        df = df.dropna(subset=["sku"]).copy()
+    return df
+
+
 def load_dataverse(engine: Engine, file_path: str | Path) -> int:
     """Backfill histórico único. Solo inserta fechas que no existan ya en la
     tabla (para no pisar datos de CheLink si algún día llegaran a
-    traslaparse)."""
+    traslaparse). Acepta tanto el esquema original de prueba como el real de
+    Chedraui.parquet (columnas distintas, ver _ALIAS_DATAVERSE)."""
     create_all(engine)
 
     df = pd.read_parquet(file_path)
@@ -107,20 +146,47 @@ def load_dataverse(engine: Engine, file_path: str | Path) -> int:
             "NumTienda": "num_tienda",
             "NumArticulo": "sku",
             "UPC": "upc",
-            "Ventas": "ventas_piezas",
-            "Inventario": "inventario_piezas",
+            **_ALIAS_DATAVERSE,
         }
     )
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     df = df.dropna(subset=["fecha"]).copy()
     df["fecha"] = df["fecha"].dt.date
+    df["num_tienda"] = pd.to_numeric(df["num_tienda"], errors="coerce")
     df["upc"] = df["upc"].astype(str).str.strip()
-    df["ventas_pesos"] = pd.NA
-    df["inventario_pesos"] = pd.NA
+
+    df = _resolver_sku_faltante(engine, df)
+    df["sku"] = pd.to_numeric(df["sku"], errors="coerce").astype("Int64")
+    df = df.dropna(subset=["num_tienda", "sku"]).copy()
+
+    if "ventas_pesos" not in df.columns:
+        df["ventas_pesos"] = pd.NA
+    if "inventario_pesos" not in df.columns:
+        df["inventario_pesos"] = pd.NA
     df["fuente"] = "dataverse"
     df["cargado_en"] = dt.datetime.utcnow()
 
     cols = [c.name for c in ventas_inventario_diario.columns]
+    df = df[cols].copy()
+
+    # Colapsar duplicados en (fecha, tienda, sku): existen en la data real
+    # (varios cortes de un mismo día). La venta se suma (son piezas vendidas
+    # en distintos momentos del día); el inventario se queda con el último
+    # valor reportado (el más reciente dentro del día).
+    df = (
+        df.groupby(["fecha", "num_tienda", "sku"], as_index=False)
+        .agg(
+            {
+                "upc": "last",
+                "ventas_piezas": "sum",
+                "ventas_pesos": "last",
+                "inventario_piezas": "last",
+                "inventario_pesos": "last",
+                "fuente": "last",
+                "cargado_en": "last",
+            }
+        )
+    )
     df = df[cols].copy()
 
     # No pisar días que ya llegaron por el feed operativo (chelink); el
