@@ -70,6 +70,21 @@ st.sidebar.title("Carga de archivos")
 st.sidebar.caption(
     "Conectado a " + ("Postgres (compartido)" if is_postgres() else "SQLite local (solo esta sesión)")
 )
+if is_postgres():
+    st.sidebar.caption(f"🔎 Host: `{engine.url.host}` · Base: `{engine.url.database}` · Usuario: `{engine.url.username}`")
+    try:
+        with engine.connect() as _diag_conn:
+            _esquema_activo = _diag_conn.execute(text("SELECT current_schema()")).scalar()
+            _tablas = _diag_conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = current_schema() ORDER BY table_name"
+                )
+            ).fetchall()
+        st.sidebar.caption(f"📋 Esquema activo: `{_esquema_activo}`")
+        st.sidebar.caption("Tablas visibles: " + (", ".join(t[0] for t in _tablas) if _tablas else "(ninguna)"))
+    except Exception as _diag_err:
+        st.sidebar.error(f"No se pudo listar tablas: {_diag_err}")
 
 with st.sidebar.expander("📋 Catálogo de Claves", expanded=False):
     f_claves = st.file_uploader("Claves.xlsx", type=["xlsx"], key="up_claves")
