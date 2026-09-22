@@ -147,7 +147,17 @@ if st.sidebar.button("Guardar y recalcular"):
     st.sidebar.success("Parámetros guardados y alertas recalculadas")
 
 with st.sidebar.expander("Registro de cargas", expanded=False):
-    st.dataframe(carga_log_reciente(engine, 15), hide_index=True, use_container_width=True)
+    _log = carga_log_reciente(engine, 200)
+    if not _log.empty:
+        st.caption("Resumen por tipo de archivo:")
+        st.dataframe(
+            _log.groupby("tipo_archivo").agg(
+                cargas=("id", "count"), filas_totales=("filas_procesadas", "sum")
+            ),
+            use_container_width=True,
+        )
+    st.caption("Detalle (hasta 200 más recientes):")
+    st.dataframe(_log, hide_index=True, use_container_width=True)
 
 # ----------------------------------------------------------------------------
 # Datos
